@@ -65,9 +65,9 @@ A. SYSTEM OVERVIEW
 
 [ ] What is currently the biggest single point of failure?
 
-[ ] What is currently the bottleneck?
+[X] What is currently the bottleneck?
     The bottleneck is the composite key between the RT update data and the trip schedule backbone which takes compute time and storage to keep an updated log of what is stale trip data and what is fresh.
-[ ] How would we MEASURE whether something is actually a bottleneck rather than guessing?
+[X] How would we MEASURE whether something is actually a bottleneck rather than guessing?
     Whether there is measureable slow down in ingestion speed
 
 ============================================================
@@ -78,10 +78,10 @@ B. GTFS / TRANSIT DOMAIN
 
 [ ] What problem was GTFS designed to solve?
 
-[ ] What is the difference between static GTFS and GTFS-Realtime?
-    The static GTFS is the planned trip schedule with the routes, arrival times, and vehicle positions that *should* occur while the GTFS-Realtime is the batched updates for the actual progress on those arrival times, stop order, and positions. the static GTFS is a text schedule while the realtime is a stream.
-[ ] Why do we need both?
-    We need both to collect data on the approximate difference between the scheduled and actual arrival times to create a model down the line that can reliably predict when a bus will actually arrive.
+[X] What is the difference between static GTFS and GTFS-Realtime?
+    The static GTFS is the planned trip schedule with the routes, arrival times, and stops that *should* occur while the GTFS-Realtime is the updates for the actual progress on those arrival times, stop order, and positions. the static GTFS is a text schedule while the realtime is a stream that we poll.
+[X] Why do we need both?
+    We need both since the static GTFS is the proposed schedule of existing trips that should be happening, while the realtime data is what is happening now and enables us to map changes compared to that schedule.
 [ ] What is an agency?
 
 [ ] What is a route?
@@ -96,7 +96,7 @@ B. GTFS / TRANSIT DOMAIN
 
 [ ] What is a service/calendar?
 
-[ ] Why is a route NOT the same thing as a trip?
+[X] Why is a route NOT the same thing as a trip?
     A route is the full path a vehicle may take while a trip may be a subset of that route between 2 or more stops.
 [ ] Explain the relationship:
 
@@ -119,8 +119,8 @@ B. GTFS / TRANSIT DOMAIN
     and
     "the bus is predicted to arrive at 3:42"?
 
-[ ] How do we connect a realtime VehiclePosition to the corresponding static GTFS information?
-    Through a composite key of the trip ID, the route ID, and the scheduled time.
+[X] How do we connect a realtime VehiclePosition to the corresponding static GTFS information?
+    
 [ ] Which identifiers are stable?
 
 [ ] Which identifiers should we NOT assume are globally unique?
@@ -133,8 +133,8 @@ B. GTFS / TRANSIT DOMAIN
 
 [ ] What assumptions can we safely make about the ordering of realtime updates?
 
-[ ] What does "stale" transit information mean?
-    That its more than 30 seconds old (the time between updates to the RT stream).
+[X] What does "stale" transit information mean?
+    That its more than 180 seconds old or its missing a timestamp.
 [ ] How does our system determine freshness?
 
 
