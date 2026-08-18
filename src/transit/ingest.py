@@ -56,10 +56,12 @@ def _insert_ignoring_duplicates(session: Session, model, rows: list[dict]) -> in
     """
     if not rows:
         return 0
-    # RETURNING is what makes the count exact: with insertmanyvalues batching, rowcount can
-    # come back as -1, whereas RETURNING yields one row per row actually inserted.
-    statement = pg_insert(model).values(rows).on_conflict_do_nothing().returning(model.id)
-    return len(session.execute(statement).scalars().all())
+    persisted = 0
+    for offset in range(0, len(rows), 1000):
+        batch = rows[offset : offset + 1000]
+        statement = pg_insert(model).values(batch).on_conflict_do_nothing().returning(model.id)
+        persisted += len(session.execute(statement).scalars().all())
+    return persisted
 
 
 def ingest_trip_updates(session: Session, agency_key: str = AGENCY_KEY) -> CycleResult:

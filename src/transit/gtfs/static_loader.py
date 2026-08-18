@@ -28,6 +28,7 @@ from transit.models import (
     Route,
     Service,
     ServiceException,
+    ShapePoint,
     Stop,
     StopTime,
     Trip,
@@ -98,7 +99,7 @@ def load_static_feed(session: Session, zip_path: Path, agency_key: str = AGENCY_
     report = LoadReport()
     archive = zipfile.ZipFile(zip_path)
 
-    for model in (StopTime, Trip, ServiceException, Service, Stop, Route, Agency):
+    for model in (StopTime, Trip, ShapePoint, ServiceException, Service, Stop, Route, Agency):
         session.execute(delete(model).where(model.agency_key == agency_key))
 
     agency_row = next(_rows(archive, "agency.txt"), None)
@@ -130,6 +131,27 @@ def load_static_feed(session: Session, zip_path: Path, agency_key: str = AGENCY_
         if len(buffer) >= BATCH_SIZE:
             report.routes += _flush(session, Route, buffer)
     report.routes += _flush(session, Route, buffer)
+
+    for row in _rows(archive, "shapes.txt"):
+        try:
+            latitude = float(row["shape_pt_lat"])
+            longitude = float(row["shape_pt_lon"])
+            sequence = int(row["shape_pt_sequence"])
+        except (KeyError, ValueError):
+            continue
+        buffer.append(
+            {
+                "agency_key": agency_key,
+                "shape_id": row["shape_id"],
+                "shape_pt_sequence": sequence,
+                "latitude": latitude,
+                "longitude": longitude,
+                "distance_traveled": _float_or_none(row.get("shape_dist_traveled")),
+            }
+        )
+        if len(buffer) >= BATCH_SIZE:
+            _flush(session, ShapePoint, buffer)
+    _flush(session, ShapePoint, buffer)
 
     for row in _rows(archive, "stops.txt"):
         buffer.append(
