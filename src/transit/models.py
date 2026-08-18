@@ -121,6 +121,23 @@ class Trip(Base):
     )
 
 
+class ShapePoint(Base):
+    """One point in a GTFS route shape polyline."""
+
+    __tablename__ = "shape_points"
+
+    agency_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    shape_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    shape_pt_sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    latitude: Mapped[float] = mapped_column(Float)
+    longitude: Mapped[float] = mapped_column(Float)
+    distance_traveled: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (
+        Index("ix_shape_points_shape", "agency_key", "shape_id", "shape_pt_sequence"),
+    )
+
+
 class StopTime(Base):
     """Scheduled arrival/departure of one trip at one stop.
 

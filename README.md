@@ -57,8 +57,10 @@ ruff check . && ruff format --check .
 | --- | --- |
 | `GET /health` | database, schedule size, per-feed freshness, last poll result |
 | `GET /routes` | routes in the loaded schedule |
+| `GET /routes/{route_id}/map` | static GTFS route paths and stop markers |
 | `GET /favorites` | the stops the UI and Shortcut care about |
 | `GET /stops/{stop_id}/arrivals` | next arrivals, newest prediction per trip, each with its age |
+| `GET /stops/{stop_id}/schedule?date=YYYY-MM-DD&time=HH:MM` | published departures after a chosen local time |
 | `GET /routes/{route_id}/vehicles` | latest observation per vehicle on a route |
 | `GET /vehicles/{vehicle_id}?since=&until=` | one vehicle's history window |
 | `GET /shortcut/next?label=UCLA` | flat "when should I leave" payload for iOS Shortcuts |

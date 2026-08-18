@@ -14,7 +14,7 @@ history, which is fine at 10^5 rows and is not fine at 10^8.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import Row, and_, desc, func, select
 from sqlalchemy.orm import Session
@@ -23,7 +23,11 @@ from transit.models import (
     ArrivalPrediction,
     IngestRun,
     Route,
+    Service,
+    ServiceException,
+    ShapePoint,
     Stop,
+    StopTime,
     Trip,
     VehicleObservation,
 )
@@ -39,6 +43,146 @@ def list_routes(session: Session, agency_key: str) -> list[Route]:
             select(Route).where(Route.agency_key == agency_key).order_by(Route.short_name)
         )
     )
+
+
+def route_map(
+    session: Session, agency_key: str, route_id: str
+) -> tuple[Route, list[list[ShapePoint]], list[Stop]]:
+    route = route_by_id_or_short_name(session, agency_key, route_id)
+    if route is None:
+        raise ValueError(f"unknown route {route_id!r}")
+
+    shape_ids = list(
+        session.scalars(
+            select(Trip.shape_id)
+            .where(
+                Trip.agency_key == agency_key,
+                Trip.route_id == route.route_id,
+                Trip.shape_id.isnot(None),
+            )
+            .distinct()
+        )
+    )
+    points = (
+        list(
+            session.scalars(
+                select(ShapePoint)
+                .where(
+                    ShapePoint.agency_key == agency_key,
+                    ShapePoint.shape_id.in_(shape_ids),
+                )
+                .order_by(ShapePoint.shape_id, ShapePoint.shape_pt_sequence)
+            )
+        )
+        if shape_ids
+        else []
+    )
+    paths = []
+    for shape_id in shape_ids:
+        paths.append([point for point in points if point.shape_id == shape_id])
+
+    stops = list(
+        session.scalars(
+            select(Stop)
+            .join(
+                StopTime,
+                and_(StopTime.agency_key == Stop.agency_key, StopTime.stop_id == Stop.stop_id),
+            )
+            .join(
+                Trip,
+                and_(Trip.agency_key == StopTime.agency_key, Trip.trip_id == StopTime.trip_id),
+            )
+            .where(
+                Stop.agency_key == agency_key,
+                Trip.route_id == route.route_id,
+            )
+            .distinct()
+            .order_by(Stop.name)
+        )
+    )
+    return route, paths, stops
+
+
+def active_service_ids(session: Session, agency_key: str, service_date: date) -> list[str]:
+    weekday_column = (
+        Service.monday
+        if service_date.weekday() == 0
+        else Service.tuesday
+        if service_date.weekday() == 1
+        else Service.wednesday
+        if service_date.weekday() == 2
+        else Service.thursday
+        if service_date.weekday() == 3
+        else Service.friday
+        if service_date.weekday() == 4
+        else Service.saturday
+        if service_date.weekday() == 5
+        else Service.sunday
+    )
+    service_ids = set(
+        session.scalars(
+            select(Service.service_id).where(
+                Service.agency_key == agency_key,
+                Service.start_date <= service_date,
+                Service.end_date >= service_date,
+                weekday_column.is_(True),
+            )
+        )
+    )
+    exceptions = session.execute(
+        select(ServiceException.service_id, ServiceException.exception_type).where(
+            ServiceException.agency_key == agency_key,
+            ServiceException.exception_date == service_date,
+        )
+    )
+    for service_id, exception_type in exceptions:
+        if exception_type == 1:
+            service_ids.add(service_id)
+        elif exception_type == 2:
+            service_ids.discard(service_id)
+    return sorted(service_ids)
+
+
+def schedule_for_stop(
+    session: Session,
+    agency_key: str,
+    stop_id: str,
+    service_date: date,
+    requested_time: time,
+    route_id: str | None = None,
+    limit: int = 50,
+) -> list[Row]:
+    service_ids = active_service_ids(session, agency_key, service_date)
+    if not service_ids:
+        return []
+    seconds = requested_time.hour * 3600 + requested_time.minute * 60 + requested_time.second
+    query = (
+        select(
+            Route.short_name,
+            Route.long_name,
+            Trip.headsign,
+            Trip.trip_id,
+            StopTime.stop_id,
+            StopTime.arrival_seconds,
+            StopTime.departure_seconds,
+        )
+        .join(Trip, and_(Trip.agency_key == StopTime.agency_key, Trip.trip_id == StopTime.trip_id))
+        .join(Route, and_(Route.agency_key == Trip.agency_key, Route.route_id == Trip.route_id))
+        .where(
+            StopTime.agency_key == agency_key,
+            StopTime.stop_id == stop_id,
+            Trip.service_id.in_(service_ids),
+            func.coalesce(StopTime.departure_seconds, StopTime.arrival_seconds) >= seconds,
+        )
+        .order_by(func.coalesce(StopTime.departure_seconds, StopTime.arrival_seconds))
+        .limit(limit)
+    )
+    if route_id:
+        route = route_by_id_or_short_name(session, agency_key, route_id)
+        if route is None:
+            return []
+        query = query.where(Trip.route_id == route.route_id)
+    return list(session.execute(query))
 
 
 def latest_predictions_for_stop(

@@ -15,7 +15,7 @@ pay off with an async driver, and at this request volume it would buy nothing me
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +31,11 @@ from transit.api.schemas import (
     FeedHealth,
     FreshnessInfo,
     HealthResponse,
+    MapPoint,
+    RouteMapResponse,
     RouteOut,
+    ScheduleOut,
+    ScheduleResponse,
     ShortcutResponse,
     StopOut,
     VehicleDetailResponse,
@@ -39,10 +43,11 @@ from transit.api.schemas import (
     VehicleOut,
     VehiclesResponse,
 )
-from transit.config import AGENCY_KEY, settings
+from transit.config import AGENCY_KEY, AGENCY_TIMEZONE, settings
 from transit.db import get_session
 from transit.freshness import Freshness
 from transit.models import FavoriteStop, Stop
+from transit.timeutil import service_time_to_instant
 from transit.web import STATIC_DIR
 
 app = FastAPI(
@@ -132,6 +137,31 @@ def list_routes(session: Session = Depends(get_session)) -> list[RouteOut]:
     ]
 
 
+@app.get("/routes/{route_id}/map", response_model=RouteMapResponse, tags=["schedule"])
+def route_map(route_id: str, session: Session = Depends(get_session)) -> RouteMapResponse:
+    try:
+        route, paths, stops = queries.route_map(session, AGENCY_KEY, route_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RouteMapResponse(
+        route_id=route.route_id,
+        route_short_name=route.short_name,
+        paths=[
+            [MapPoint(latitude=point.latitude, longitude=point.longitude) for point in path]
+            for path in paths
+        ],
+        stops=[
+            StopOut(
+                stop_id=stop.stop_id,
+                name=stop.name,
+                latitude=stop.latitude,
+                longitude=stop.longitude,
+            )
+            for stop in stops
+        ],
+    )
+
+
 @app.get("/favorites", response_model=list[FavoriteOut], tags=["schedule"])
 def list_favorites(session: Session = Depends(get_session)) -> list[FavoriteOut]:
     """The stops this system exists for. Consumed by the UI and the Shortcut."""
@@ -153,6 +183,58 @@ def list_favorites(session: Session = Depends(get_session)) -> list[FavoriteOut]
         )
         for favorite, stop in rows
     ]
+
+
+@app.get("/stops/{stop_id}/schedule", response_model=ScheduleResponse, tags=["schedule"])
+def stop_schedule(
+    stop_id: str,
+    service_date: date = Query(alias="date"),
+    requested_time: time = Query(alias="time"),
+    route: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    session: Session = Depends(get_session),
+) -> ScheduleResponse:
+    stop = queries.get_stop(session, AGENCY_KEY, stop_id)
+    if stop is None:
+        raise HTTPException(status_code=404, detail=f"unknown stop {stop_id!r}")
+    rows = queries.schedule_for_stop(
+        session,
+        AGENCY_KEY,
+        stop_id,
+        service_date,
+        requested_time,
+        route_id=route,
+        limit=limit,
+    )
+    schedule = []
+    for row in rows:
+        seconds = row.departure_seconds or row.arrival_seconds
+        if seconds is None:
+            continue
+        scheduled_time = service_time_to_instant(service_date, seconds, AGENCY_TIMEZONE)
+        schedule.append(
+            ScheduleOut(
+                route_short_name=row.short_name,
+                route_long_name=row.long_name,
+                headsign=row.headsign,
+                trip_id=row.trip_id,
+                stop_id=row.stop_id,
+                scheduled_time=scheduled_time,
+                scheduled_time_label=f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}",
+            )
+        )
+    return ScheduleResponse(
+        stop=StopOut(
+            stop_id=stop.stop_id,
+            name=stop.name,
+            latitude=stop.latitude,
+            longitude=stop.longitude,
+        ),
+        service_date=service_date,
+        requested_time=requested_time.strftime("%H:%M"),
+        generated_at=datetime.now(timezone.utc),
+        schedule=schedule,
+    )
 
 
 def _arrivals(session: Session, stop_id: str, limit: int, horizon_minutes: int) -> ArrivalsResponse:

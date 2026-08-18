@@ -1,4 +1,6 @@
-from datetime import datetime
+from __future__ import annotations
+
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -17,6 +19,18 @@ class RouteOut(BaseModel):
     long_name: str | None
     route_type: int | None
     color: str | None
+
+
+class MapPoint(BaseModel):
+    latitude: float
+    longitude: float
+
+
+class RouteMapResponse(BaseModel):
+    route_id: str
+    route_short_name: str | None
+    paths: list[list[MapPoint]]
+    stops: list[StopOut]
 
 
 class StopOut(BaseModel):
@@ -137,3 +151,21 @@ class FavoriteOut(BaseModel):
     stop_id: str
     stop_name: str
     walk_minutes: int | None
+
+
+class ScheduleOut(BaseModel):
+    route_short_name: str | None
+    route_long_name: str | None
+    headsign: str | None
+    trip_id: str
+    stop_id: str
+    scheduled_time: datetime
+    scheduled_time_label: str
+
+
+class ScheduleResponse(BaseModel):
+    stop: StopOut
+    service_date: date
+    requested_time: str
+    generated_at: datetime
+    schedule: list[ScheduleOut]
