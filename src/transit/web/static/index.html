@@ -200,6 +200,11 @@
           <button data-nearby-stop="${index}">Use this stop</button></div>
           <div class="board"><div class="empty">Loading departures…</div></div></article>`;
       }
+      function updateSelectedStops() {
+        const origin = state.origin && state.origin.stop_id ? state.origin.name : "origin location";
+        const destination = state.destination && state.destination.stop_id ? state.destination.name : "destination location";
+        $("selected-stops").textContent = `Using ${origin} → ${destination}.`;
+      }
       async function renderNearby(latitude, longitude) {
         $("nearby-status").textContent = "Finding nearby stops…";
         const data = await json(`/nearby/stops?latitude=${latitude}&longitude=${longitude}`);
@@ -211,7 +216,7 @@
           const stop = state.nearby[Number(button.dataset.nearbyStop)];
           state.origin = stop;
           $("origin-search").value = stop.name;
-          $("selected-stops").textContent = `Starting from ${stop.name}`;
+          updateSelectedStops();
           document.querySelector('[data-panel="planner"]').click();
         }));
         await Promise.all(data.stops.map(async (stop, index) => {
@@ -258,6 +263,7 @@
           const stop = data.stops[Number(button.dataset[`${key}Stop`])];
           state[key] = stop;
           $(resultsId).innerHTML = `<div class="meta">Using ${esc(stop.name)} (${stop.distance_meters}m away)</div>`;
+          updateSelectedStops();
         }));
       }
       async function planTrip() {
@@ -269,7 +275,9 @@
         let destinationStop = state.destination.stop_id ? state.destination : null;
         if (!originStop) originStop = (await json(`/nearby/stops?latitude=${state.origin.latitude}&longitude=${state.origin.longitude}&limit=5`)).stops[0];
         if (!destinationStop) destinationStop = (await json(`/nearby/stops?latitude=${state.destination.latitude}&longitude=${state.destination.longitude}&limit=5`)).stops[0];
-        $("selected-stops").textContent = `Using ${originStop.name} → ${destinationStop.name}. You can change this by choosing a nearby stop from the results.`;
+        state.origin = originStop;
+        state.destination = destinationStop;
+        updateSelectedStops();
         const body = { origin_stop_id: originStop.stop_id, destination_stop_id: destinationStop.stop_id,
           mode: $("plan-mode").value };
         if (body.mode === "arrive_by") body.arrive_by = new Date($("arrive-by").value).toISOString();
@@ -346,6 +354,7 @@
         document.querySelectorAll("[data-origin-stop]").forEach((button) => button.addEventListener("click", () => {
           state.origin = results.stops[Number(button.dataset.originStop)];
           $("origin-search").value = state.origin.name;
+          updateSelectedStops();
         }));
       }));
       $("use-location").addEventListener("click", () => locate((lat, lon) => renderNearby(lat, lon)));

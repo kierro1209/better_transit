@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
 from math import cos, pi
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Row, and_, desc, func, select
 from sqlalchemy.orm import Session, aliased
 
+from transit.config import AGENCY_TIMEZONE
 from transit.models import (
     ArrivalPrediction,
     IngestRun,
@@ -94,6 +96,10 @@ def direct_trip_options(
     service_ids = active_service_ids(session, agency_key, service_date)
     origin = aliased(StopTime)
     destination = aliased(StopTime)
+    now_in_agency_time = now.astimezone(ZoneInfo(AGENCY_TIMEZONE))
+    now_seconds = (
+        now_in_agency_time.hour * 3600 + now_in_agency_time.minute * 60 + now_in_agency_time.second
+    )
     query = (
         select(
             Route.short_name,
@@ -118,6 +124,7 @@ def direct_trip_options(
             origin.stop_id == origin_stop_id,
             destination.stop_id == destination_stop_id,
             Trip.service_id.in_(service_ids),
+            origin.departure_seconds >= now_seconds - 2 * 60 * 60,
         )
         .order_by(origin.departure_seconds)
         .limit(100)
