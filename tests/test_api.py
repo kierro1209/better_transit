@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from transit.api import main as api_main
 from transit.api.main import app
 from transit.db import get_session
 from transit.models import ArrivalPrediction, FavoriteStop, IngestRun, VehicleObservation
@@ -50,6 +51,17 @@ def test_health_reports_degraded_without_ingestion(client, schedule):
     assert body["database"] == "ok"
     assert body["schedule_loaded"] is True
     assert body["status"] == "degraded"  # schedule loaded but nothing ingested recently
+
+
+def test_lifespan_does_not_start_poller_when_disabled(monkeypatch):
+    monkeypatch.setenv("INGEST_IN_SERVER", "false")
+
+    def fail_if_started(*args, **kwargs):
+        raise AssertionError("poller should not start when ingestion is disabled")
+
+    monkeypatch.setattr(api_main, "run_loop", fail_if_started)
+    with TestClient(app):
+        pass
 
 
 def test_health_reports_ok_after_a_recent_run(client, session, schedule):

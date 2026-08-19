@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -319,19 +320,16 @@ def run_once() -> list[CycleResult]:
     return results
 
 
-def run_forever(interval_seconds: int | None = None) -> None:
+def run_loop(interval_seconds: int | None, stop_event: threading.Event) -> None:
+    """Run ingestion cycles until ``stop_event`` is set.
+
+    This function is safe to call from a worker thread. Signal handlers belong in
+    :func:`run_forever`, which is the main-thread entry point for the CLI.
+    """
     interval = interval_seconds or settings.poll_interval_seconds
-    stopping = {"flag": False}
-
-    def handle_signal(signum, _frame):
-        log.info("shutdown requested", extra={"fields": {"signal": signum}})
-        stopping["flag"] = True
-
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
 
     log.info("ingestion loop started", extra={"fields": {"interval_seconds": interval}})
-    while not stopping["flag"]:
+    while not stop_event.is_set():
         started = time.monotonic()
         try:
             run_once()
@@ -341,6 +339,21 @@ def run_forever(interval_seconds: int | None = None) -> None:
         # Sleep the remainder of the interval so the poll rate stays constant regardless of
         # how long the cycle took, and wake up often enough to notice a shutdown signal.
         deadline = started + interval
-        while not stopping["flag"] and time.monotonic() < deadline:
-            time.sleep(0.5)
+        while not stop_event.is_set() and time.monotonic() < deadline:
+            stop_event.wait(timeout=0.5)
     log.info("ingestion loop stopped")
+
+
+def run_forever(interval_seconds: int | None = None) -> None:
+    """Run ingestion forever, stopping when the process receives a termination signal."""
+    interval = interval_seconds or settings.poll_interval_seconds
+    stop_event = threading.Event()
+
+    def handle_signal(signum, _frame):
+        log.info("shutdown requested", extra={"fields": {"signal": signum}})
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    run_loop(interval, stop_event)

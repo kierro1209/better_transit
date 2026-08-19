@@ -25,9 +25,9 @@ GTFS-Realtime    ──►  decode protobuf ─┤
                               web UI      /shortcut/next
 ```
 
-One process polls (`ingest-loop`), one process serves (`serve`), one Postgres between them.
-No queue, no cache, no scheduler: a poll is a few hundred milliseconds of work every 30
-seconds, and the API's slowest query touches an indexed table.
+For local use, the API can run the poller in the same process. No queue, no cache, no scheduler:
+a poll is a few hundred milliseconds of work every 30 seconds, and the API's slowest query
+touches an indexed table.
 
 ## Running it
 
@@ -39,9 +39,18 @@ alembic upgrade head                       # create the schema
 python -m transit.cli load-static          # download + load the GTFS zip (~124k stop_times)
 python -m transit.cli seed-favorites       # config/favorites.json -> favorite_stops
 python -m transit.cli ingest-once          # one poll, prints a JSON summary
+python -m transit.cli serve --with-ingest  # API + UI + poller at http://127.0.0.1:8000
+```
+
+If you prefer to restart ingestion and the API independently, run the two processes separately:
+
+```bash
 python -m transit.cli ingest-loop          # poll every POLL_INTERVAL_SECONDS
 python -m transit.cli serve                # http://127.0.0.1:8000  (UI at /, docs at /docs)
 ```
+
+`--with-ingest` is intended for a single uvicorn worker. With multiple workers, each worker
+would start its own poller and poll the feeds more than once.
 
 Tests need the same Postgres running; they create and use a `transit_test` database and
 skip themselves if Postgres is unreachable.
