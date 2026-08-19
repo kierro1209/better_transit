@@ -15,6 +15,9 @@ pay off with an async driver, and at this request volume it would buy nothing me
 
 from __future__ import annotations
 
+import logging
+import threading
+from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -43,17 +46,61 @@ from transit.api.schemas import (
     VehicleOut,
     VehiclesResponse,
 )
-from transit.config import AGENCY_KEY, AGENCY_TIMEZONE, settings
+from transit.config import AGENCY_KEY, AGENCY_TIMEZONE, Settings, settings
 from transit.db import get_session
 from transit.freshness import Freshness
+from transit.ingest import run_loop
 from transit.models import FavoriteStop, Stop
 from transit.timeutil import service_time_to_instant
 from transit.web import STATIC_DIR
+
+log = logging.getLogger("transit.api")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Optionally run realtime ingestion alongside the API process.
+
+    The setting is loaded when the server starts rather than when this module is imported,
+    which keeps CLI options working when uvicorn's reload supervisor launches a child process.
+    """
+    runtime_settings = Settings()
+    stop_event: threading.Event | None = None
+    poller: threading.Thread | None = None
+    if runtime_settings.ingest_in_server:
+        stop_event = threading.Event()
+        poller = threading.Thread(
+            target=run_loop,
+            args=(runtime_settings.poll_interval_seconds, stop_event),
+            daemon=True,
+            name="ingestion-poller",
+        )
+        poller.start()
+        log.info(
+            "in-process ingestion poller started",
+            extra={"fields": {"interval_seconds": runtime_settings.poll_interval_seconds}},
+        )
+    else:
+        log.info("in-process ingestion poller not started", extra={"fields": {"enabled": False}})
+
+    try:
+        yield
+    finally:
+        if stop_event is not None and poller is not None:
+            log.info("stopping in-process ingestion poller")
+            stop_event.set()
+            poller.join(timeout=5)
+            if poller.is_alive():
+                log.warning("in-process ingestion poller did not stop before timeout")
+            else:
+                log.info("in-process ingestion poller stopped")
+
 
 app = FastAPI(
     title="UCLA Transit Intelligence",
     description="Realtime arrivals and vehicle history for the Big Blue Bus routes around UCLA.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # The UI is served from this same app, but a Shortcut or a separate dev server may not be.

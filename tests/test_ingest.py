@@ -4,11 +4,14 @@ The HTTP call is replaced; everything else - decoding, matching, stop resolution
 ON CONFLICT insert - is the real code path against the real database.
 """
 
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from google.transit import gtfs_realtime_pb2
 from sqlalchemy import func, select
+from sqlalchemy.orm import sessionmaker
 
 from transit import ingest as ingest_module
 from transit.gtfs.realtime import FetchResult
@@ -90,6 +93,40 @@ def test_trip_updates_are_normalized_and_persisted(session, schedule, fake_feed)
     # An unmatched trip still records history; it just cannot name a static stop.
     unmatched = [p for p in predictions if p.rt_trip_id == "RT-2"]
     assert unmatched[0].stop_id is None and unmatched[0].rt_stop_id == "RT-STOP-9"
+
+
+def test_thread_safe_loop_runs_a_cycle_and_stops(engine, fake_feed, monkeypatch):
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    fake_feed(build_trip_updates(now, now))
+
+    cycle_finished = threading.Event()
+    original_run_once = ingest_module.run_once
+
+    def run_once_and_signal():
+        result = original_run_once()
+        cycle_finished.set()
+        return result
+
+    @contextmanager
+    def test_session_scope():
+        session = sessionmaker(bind=engine, expire_on_commit=False, future=True)()
+        try:
+            yield session
+        finally:
+            session.rollback()
+            session.close()
+
+    monkeypatch.setattr(ingest_module, "run_once", run_once_and_signal)
+    monkeypatch.setattr(ingest_module, "session_scope", test_session_scope)
+    stop_event = threading.Event()
+    thread = threading.Thread(target=ingest_module.run_loop, args=(60, stop_event))
+    thread.start()
+
+    assert cycle_finished.wait(timeout=5)
+    stop_event.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
 
 
 def test_trip_update_produces_a_positionless_vehicle_observation(session, schedule, fake_feed):

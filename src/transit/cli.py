@@ -6,11 +6,13 @@ python -m transit.cli show-favorites     # sanity check the loaded schedule
 python -m transit.cli ingest-once        # one realtime poll of every feed
 python -m transit.cli ingest-loop        # poll forever
 python -m transit.cli serve              # run the API + UI
+python -m transit.cli serve --with-ingest  # run the API + UI + realtime poller
 """
 
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -85,6 +87,10 @@ def cmd_ingest_loop(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     import uvicorn
 
+    if args.with_ingest:
+        # Uvicorn's reload worker is a separate process, so pass this through the environment
+        # rather than changing only the settings object already loaded in this process.
+        os.environ["INGEST_IN_SERVER"] = "true"
     uvicorn.run("transit.api.main:app", host=args.host, port=args.port, reload=args.reload)
 
 
@@ -111,6 +117,7 @@ def main() -> None:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--reload", action="store_true")
+    serve.add_argument("--with-ingest", action="store_true")
     serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()

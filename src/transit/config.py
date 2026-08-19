@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     bbb_vehicle_positions_url: str = "https://gtfs.bigbluebus.com/vehiclepositions.bin"
 
     poll_interval_seconds: int = 30
+    ingest_in_server: bool = False
     feed_stale_after_seconds: int = 180
 
     http_timeout_seconds: float = 20.0
