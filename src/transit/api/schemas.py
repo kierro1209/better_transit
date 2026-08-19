@@ -153,6 +153,48 @@ class FavoriteOut(BaseModel):
     walk_minutes: int | None
 
 
+class NearbyStopOut(StopOut):
+    distance_meters: int
+    routes: list[str]
+
+
+class NearbyStopsResponse(BaseModel):
+    latitude: float
+    longitude: float
+    stops: list[NearbyStopOut]
+
+
+class GeocodeResult(BaseModel):
+    display_name: str
+    latitude: float
+    longitude: float
+
+
+class PlanRequest(BaseModel):
+    origin_stop_id: str
+    destination_stop_id: str
+    mode: str = "depart_now"
+    arrive_by: datetime | None = None
+
+
+class PlanOption(BaseModel):
+    route_short_name: str | None
+    headsign: str | None
+    origin_stop: StopOut
+    destination_stop: StopOut
+    next_bus_at: datetime
+    estimated_arrival_at: datetime
+    travel_minutes: int
+    wait_minutes: int
+    realtime: bool
+
+
+class PlanResponse(BaseModel):
+    origin: StopOut
+    destination: StopOut
+    options: list[PlanOption]
+
+
 class ScheduleOut(BaseModel):
     route_short_name: str | None
     route_long_name: str | None

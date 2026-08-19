@@ -15,9 +15,10 @@ history, which is fine at 10^5 rows and is not fine at 10^8.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+from math import cos, pi
 
 from sqlalchemy import Row, and_, desc, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from transit.models import (
     ArrivalPrediction,
@@ -35,6 +36,119 @@ from transit.models import (
 
 def get_stop(session: Session, agency_key: str, stop_id: str) -> Stop | None:
     return session.get(Stop, (agency_key, stop_id))
+
+
+def nearby_stops(
+    session: Session,
+    agency_key: str,
+    latitude: float,
+    longitude: float,
+    limit: int = 8,
+) -> list[tuple[Stop, int, list[str]]]:
+    stops = list(
+        session.scalars(
+            select(Stop).where(
+                Stop.agency_key == agency_key,
+                Stop.latitude.isnot(None),
+                Stop.longitude.isnot(None),
+            )
+        )
+    )
+    longitude_scale = cos(latitude * pi / 180)
+    ranked = []
+    for stop in stops:
+        north_south = (stop.latitude - latitude) * 111_000
+        east_west = (stop.longitude - longitude) * 111_000 * longitude_scale
+        distance = int((north_south**2 + east_west**2) ** 0.5)
+        routes = list(
+            session.scalars(
+                select(Route.short_name)
+                .join(
+                    Trip,
+                    and_(Trip.agency_key == Route.agency_key, Trip.route_id == Route.route_id),
+                )
+                .join(
+                    StopTime,
+                    and_(StopTime.agency_key == Trip.agency_key, StopTime.trip_id == Trip.trip_id),
+                )
+                .where(StopTime.agency_key == agency_key, StopTime.stop_id == stop.stop_id)
+                .distinct()
+                .order_by(Route.short_name)
+            )
+        )
+        ranked.append((distance, stop, [route for route in routes if route]))
+    ranked.sort(key=lambda item: item[0])
+    return [(stop, distance, routes) for distance, stop, routes in ranked[:limit]]
+
+
+def direct_trip_options(
+    session: Session,
+    agency_key: str,
+    origin_stop_id: str,
+    destination_stop_id: str,
+    service_date: date,
+    now: datetime,
+    arrive_by: datetime | None = None,
+    limit: int = 8,
+) -> list[Row]:
+    service_ids = active_service_ids(session, agency_key, service_date)
+    origin = aliased(StopTime)
+    destination = aliased(StopTime)
+    query = (
+        select(
+            Route.short_name,
+            Trip.headsign,
+            Trip.trip_id,
+            origin.departure_seconds.label("origin_seconds"),
+            destination.arrival_seconds.label("destination_seconds"),
+        )
+        .select_from(origin)
+        .join(
+            destination,
+            and_(
+                destination.agency_key == origin.agency_key,
+                destination.trip_id == origin.trip_id,
+                destination.stop_sequence > origin.stop_sequence,
+            ),
+        )
+        .join(Trip, and_(Trip.agency_key == origin.agency_key, Trip.trip_id == origin.trip_id))
+        .join(Route, and_(Route.agency_key == Trip.agency_key, Route.route_id == Trip.route_id))
+        .where(
+            origin.agency_key == agency_key,
+            origin.stop_id == origin_stop_id,
+            destination.stop_id == destination_stop_id,
+            Trip.service_id.in_(service_ids),
+        )
+        .order_by(origin.departure_seconds)
+        .limit(100)
+    )
+    rows = list(session.execute(query))
+    results = []
+    for row in rows:
+        if row.origin_seconds is None or row.destination_seconds is None:
+            continue
+        results.append(row)
+    return results[:limit]
+
+
+def latest_prediction_for_trip_at_stop(
+    session: Session,
+    agency_key: str,
+    scheduled_trip_id: str,
+    stop_id: str,
+    now: datetime,
+) -> ArrivalPrediction | None:
+    return session.scalars(
+        select(ArrivalPrediction)
+        .where(
+            ArrivalPrediction.agency_key == agency_key,
+            ArrivalPrediction.scheduled_trip_id == scheduled_trip_id,
+            ArrivalPrediction.stop_id == stop_id,
+            ArrivalPrediction.predicted_arrival >= now - timedelta(minutes=1),
+        )
+        .order_by(desc(ArrivalPrediction.observed_at))
+        .limit(1)
+    ).first()
 
 
 def list_routes(session: Session, agency_key: str) -> list[Route]:

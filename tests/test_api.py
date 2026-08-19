@@ -91,6 +91,15 @@ def test_routes_lists_the_schedule(client, schedule):
     assert [r["short_name"] for r in routes] == ["R12"]
 
 
+def test_nearby_stops_lists_distance_and_routes(client, schedule):
+    response = client.get("/nearby/stops?latitude=34.001&longitude=-118.44&limit=2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stops"][0]["stop_id"] == "S1"
+    assert body["stops"][0]["routes"] == ["R12"]
+    assert body["stops"][0]["distance_meters"] == 0
+
+
 def test_unknown_stop_returns_404(client, schedule):
     response = client.get("/stops/NOPE/arrivals")
     assert response.status_code == 404

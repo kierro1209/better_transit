@@ -19,7 +19,9 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -33,8 +35,14 @@ from transit.api.schemas import (
     FavoriteOut,
     FeedHealth,
     FreshnessInfo,
+    GeocodeResult,
     HealthResponse,
     MapPoint,
+    NearbyStopOut,
+    NearbyStopsResponse,
+    PlanOption,
+    PlanRequest,
+    PlanResponse,
     RouteMapResponse,
     RouteOut,
     ScheduleOut,
@@ -230,6 +238,129 @@ def list_favorites(session: Session = Depends(get_session)) -> list[FavoriteOut]
         )
         for favorite, stop in rows
     ]
+
+
+@app.get("/geocode", response_model=list[GeocodeResult], tags=["planning"])
+def geocode(q: str = Query(min_length=2, max_length=200)) -> list[GeocodeResult]:
+    """Search a place using OpenStreetMap's public Nominatim service."""
+    response = httpx.get(
+        "https://nominatim.openstreetmap.org/search",
+        params={"q": q, "format": "jsonv2", "limit": 5, "countrycodes": "us"},
+        headers={"User-Agent": "better-transit/0.1 (UCLA transit planner)"},
+        timeout=settings.http_timeout_seconds,
+    )
+    response.raise_for_status()
+    return [
+        GeocodeResult(
+            display_name=item["display_name"],
+            latitude=float(item["lat"]),
+            longitude=float(item["lon"]),
+        )
+        for item in response.json()
+    ]
+
+
+@app.get("/nearby/stops", response_model=NearbyStopsResponse, tags=["planning"])
+def nearby(
+    latitude: float = Query(ge=-90, le=90),
+    longitude: float = Query(ge=-180, le=180),
+    limit: int = Query(default=8, ge=1, le=20),
+    session: Session = Depends(get_session),
+) -> NearbyStopsResponse:
+    rows = queries.nearby_stops(session, AGENCY_KEY, latitude, longitude, limit)
+    return NearbyStopsResponse(
+        latitude=latitude,
+        longitude=longitude,
+        stops=[
+            NearbyStopOut(
+                stop_id=stop.stop_id,
+                name=stop.name,
+                latitude=stop.latitude,
+                longitude=stop.longitude,
+                distance_meters=distance,
+                routes=routes,
+            )
+            for stop, distance, routes in rows
+        ],
+    )
+
+
+@app.post("/plan", response_model=PlanResponse, tags=["planning"])
+def plan(request: PlanRequest, session: Session = Depends(get_session)) -> PlanResponse:
+    if request.mode not in {"depart_now", "arrive_by"}:
+        raise HTTPException(status_code=422, detail="mode must be depart_now or arrive_by")
+    origin = queries.get_stop(session, AGENCY_KEY, request.origin_stop_id)
+    destination = queries.get_stop(session, AGENCY_KEY, request.destination_stop_id)
+    if origin is None or destination is None:
+        raise HTTPException(status_code=404, detail="unknown origin or destination stop")
+    now = datetime.now(timezone.utc)
+    deadline = request.arrive_by if request.mode == "arrive_by" else None
+    agency_date = now.astimezone(ZoneInfo(AGENCY_TIMEZONE)).date()
+    rows = queries.direct_trip_options(
+        session,
+        AGENCY_KEY,
+        origin.stop_id,
+        destination.stop_id,
+        agency_date,
+        now,
+        arrive_by=deadline,
+    )
+    options = []
+    for row in rows:
+        next_bus_at = service_time_to_instant(agency_date, row.origin_seconds, AGENCY_TIMEZONE)
+        arrival_at = service_time_to_instant(agency_date, row.destination_seconds, AGENCY_TIMEZONE)
+        scheduled_departure = next_bus_at
+        prediction = queries.latest_prediction_for_trip_at_stop(
+            session, AGENCY_KEY, row.trip_id, origin.stop_id, now
+        )
+        realtime = prediction is not None and prediction.predicted_arrival is not None
+        if not realtime and next_bus_at < now - timedelta(minutes=1):
+            continue
+        if realtime:
+            next_bus_at = prediction.predicted_arrival
+            arrival_at = next_bus_at + (arrival_at - scheduled_departure)
+        if request.mode == "arrive_by" and deadline is not None and arrival_at > deadline:
+            continue
+        origin_out = StopOut(
+            stop_id=origin.stop_id,
+            name=origin.name,
+            latitude=origin.latitude,
+            longitude=origin.longitude,
+        )
+        destination_out = StopOut(
+            stop_id=destination.stop_id,
+            name=destination.name,
+            latitude=destination.latitude,
+            longitude=destination.longitude,
+        )
+        options.append(
+            PlanOption(
+                route_short_name=row.short_name,
+                headsign=row.headsign,
+                origin_stop=origin_out,
+                destination_stop=destination_out,
+                next_bus_at=next_bus_at,
+                estimated_arrival_at=arrival_at,
+                travel_minutes=max(1, round((arrival_at - next_bus_at).total_seconds() / 60)),
+                wait_minutes=max(0, round((next_bus_at - now).total_seconds() / 60)),
+                realtime=realtime,
+            )
+        )
+    return PlanResponse(
+        origin=StopOut(
+            stop_id=origin.stop_id,
+            name=origin.name,
+            latitude=origin.latitude,
+            longitude=origin.longitude,
+        ),
+        destination=StopOut(
+            stop_id=destination.stop_id,
+            name=destination.name,
+            latitude=destination.latitude,
+            longitude=destination.longitude,
+        ),
+        options=options,
+    )
 
 
 @app.get("/stops/{stop_id}/schedule", response_model=ScheduleResponse, tags=["schedule"])
