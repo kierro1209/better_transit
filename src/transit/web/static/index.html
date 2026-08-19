@@ -50,6 +50,12 @@
       .schedule { margin-top:16px; display:grid; gap:8px; }
       .schedule-row { display:grid; grid-template-columns:90px 80px 1fr; gap:12px; padding:11px 12px;
         background:var(--panel); border:1px solid var(--line); border-radius:9px; }
+      .search-results { display:grid; gap:6px; margin:-4px 0 12px; }
+      .search-result { text-align:left; width:100%; }
+      .nearby-card { display:grid; gap:10px; }
+      .nearby-card .arrival { margin-top:2px; }
+      .plan-option { display:grid; gap:5px; padding:14px; background:var(--panel);
+        border:1px solid var(--line); border-radius:10px; }
       .time { font-variant-numeric:tabular-nums; font-weight:750; }
       .form-row { margin:14px 0; }
       label { color:var(--muted); font-size:13px; display:grid; gap:4px; }
@@ -62,16 +68,53 @@
   <body>
     <main>
       <div class="toolbar">
-        <div><h1>UCLA Transit</h1><div class="sub">Big Blue Bus, organized like a station board</div></div>
+        <div><h1>UCLA Transit</h1><div class="sub">Find the next bus or plan a direct trip</div></div>
         <div id="health" class="status">Checking feed…</div>
       </div>
       <div class="tabs" role="tablist">
-        <button class="tab active" data-panel="board">Next arrivals</button>
-        <button class="tab" data-panel="map-panel">Route map</button>
+        <button class="tab active" data-panel="nearby-panel">Nearby buses</button>
         <button class="tab" data-panel="planner">Plan a trip</button>
+        <button class="tab" data-panel="board">Saved stops</button>
+        <button class="tab" data-panel="map-panel">Route map</button>
       </div>
 
-      <section id="board" class="panel active">
+      <section id="nearby-panel" class="panel active">
+        <div class="card">
+          <div class="card-head"><div><h2>What buses are near me?</h2>
+            <div class="meta">Use your location to see nearby stops and live departures.</div></div>
+            <button id="use-location">Use my location</button></div>
+          <div id="nearby-status" class="empty">Location permission is needed to find nearby stops.</div>
+          <div id="nearby-stops" class="cards"></div>
+        </div>
+      </section>
+
+      <section id="planner" class="panel">
+        <div class="card">
+          <h2>Get me there</h2>
+          <div class="meta">Direct single-bus trips for now. Walking time is not included.</div>
+          <div class="form-row">
+            <label>From<input id="origin-search" placeholder="Search a place" autocomplete="off" /></label>
+            <button id="origin-location" type="button">Use my location</button>
+          </div>
+          <div id="origin-results" class="search-results"></div>
+          <div class="form-row">
+            <label>To<input id="destination-search" placeholder="Search a place" autocomplete="off" /></label>
+          </div>
+          <div id="destination-results" class="search-results"></div>
+          <div class="form-row">
+            <label>Trip timing<select id="plan-mode">
+              <option value="depart_now">Depart as soon as possible</option>
+              <option value="arrive_by">Arrive by a deadline</option>
+            </select></label>
+            <label id="deadline-label">Arrive by<input id="arrive-by" type="datetime-local" /></label>
+            <button id="plan-submit">Find buses</button>
+          </div>
+          <div id="selected-stops" class="meta"></div>
+          <div id="plan-results" class="schedule"></div>
+        </div>
+      </section>
+
+      <section id="board" class="panel">
         <div class="toolbar"><div id="labels" class="tabs"></div><button id="refresh">Refresh</button></div>
         <div id="stops" class="cards"></div>
       </section>
@@ -83,25 +126,14 @@
           shown because Big Blue Bus currently publishes no usable VehiclePositions data.</div>
       </section>
 
-      <section id="planner" class="panel">
-        <div class="form-row">
-          <label>Stop<select id="plan-stop"></select></label>
-          <label>Route<select id="plan-route"></select></label>
-          <label>Date<input id="plan-date" type="date" /></label>
-          <label>After<input id="plan-time" type="time" /></label>
-          <button id="plan-submit">Show schedule</button>
-        </div>
-        <div class="muted">This is the published schedule, not a realtime prediction. Calendar exceptions
-          are applied on the server.</div>
-        <div id="schedule" class="schedule"></div>
-      </section>
       <footer>Realtime refreshes every 20 seconds. <a href="/docs">API docs</a></footer>
     </main>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""></script>
     <script>
-      const state = { favorites: [], routes: [], label: null, map: null, mapLayer: null };
+      const state = { favorites: [], routes: [], label: null, map: null, mapLayer: null,
+        origin: null, destination: null, nearby: [] };
       const $ = (id) => document.getElementById(id);
       const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) =>
         ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
@@ -126,11 +158,7 @@
         const routeOptions = state.routes.map((r) =>
           `<option value="${esc(r.route_id)}">${esc(r.short_name || r.route_id)}${r.long_name ? ` — ${esc(r.long_name)}` : ""}</option>`).join("");
         $("map-route").innerHTML = routeOptions;
-        $("plan-route").innerHTML = `<option value="">All routes</option>${routeOptions}`;
-        $("plan-stop").innerHTML = state.favorites.map((f) =>
-          `<option value="${esc(f.stop_id)}">${esc(f.stop_name)} (${esc(f.label)})</option>`).join("");
-        $("plan-date").value = $("plan-date").value || today();
-        $("plan-time").value = $("plan-time").value || nowTime();
+        $("map-route").innerHTML = routeOptions;
       }
       async function loadHealth() {
         try {
@@ -165,6 +193,108 @@
               `<div class="empty">No live departures in the next 90 minutes.</div>`;
           } catch { card.querySelector(".board").innerHTML = `<div class="empty">Could not load departures.</div>`; }
         }));
+      }
+      function stopMarkup(stop, index) {
+        return `<article class="card nearby-card"><div class="card-head"><div><h2>${esc(stop.name)}</h2>
+          <div class="meta">${stop.distance_meters}m away · ${esc(stop.routes.join(", ") || "No scheduled routes")}</div></div>
+          <button data-nearby-stop="${index}">Use this stop</button></div>
+          <div class="board"><div class="empty">Loading departures…</div></div></article>`;
+      }
+      function updateSelectedStops() {
+        const origin = state.origin && state.origin.stop_id ? state.origin.name : "origin location";
+        const destination = state.destination && state.destination.stop_id ? state.destination.name : "destination location";
+        $("selected-stops").textContent = `Using ${origin} → ${destination}.`;
+      }
+      async function renderNearby(latitude, longitude) {
+        $("nearby-status").textContent = "Finding nearby stops…";
+        const data = await json(`/nearby/stops?latitude=${latitude}&longitude=${longitude}`);
+        state.nearby = data.stops;
+        $("nearby-status").textContent = data.stops.length ? "Best nearby stops, with alternatives you can choose." :
+          "No transit stops were found nearby.";
+        $("nearby-stops").innerHTML = data.stops.map(stopMarkup).join("");
+        document.querySelectorAll("[data-nearby-stop]").forEach((button) => button.addEventListener("click", () => {
+          const stop = state.nearby[Number(button.dataset.nearbyStop)];
+          state.origin = stop;
+          $("origin-search").value = stop.name;
+          updateSelectedStops();
+          document.querySelector('[data-panel="planner"]').click();
+        }));
+        await Promise.all(data.stops.map(async (stop, index) => {
+          try {
+            const arrivals = await json(`/stops/${encodeURIComponent(stop.stop_id)}/arrivals?limit=4`);
+            const card = $("nearby-stops").children[index];
+            card.querySelector(".board").innerHTML = arrivals.arrivals.length ?
+              arrivals.arrivals.map(arrivalMarkup).join("") :
+              `<div class="empty">No live departures in the next 90 minutes.</div>`;
+          } catch {}
+        }));
+      }
+      function locate(callback) {
+        if (!navigator.geolocation) { $("nearby-status").textContent = "Location is not supported by this browser."; return; }
+        navigator.geolocation.getCurrentPosition(
+          (position) => callback(position.coords.latitude, position.coords.longitude),
+          () => { $("nearby-status").textContent = "Location permission was denied."; },
+          { enableHighAccuracy: false, timeout: 10000 }
+        );
+      }
+      async function searchLocation(inputId, resultsId, key) {
+        const query = $(inputId).value.trim();
+        if (query.length < 2) return;
+        $(resultsId).innerHTML = `<div class="empty">Searching…</div>`;
+        try {
+          const results = await json(`/geocode?q=${encodeURIComponent(query)}`);
+          $(resultsId).innerHTML = results.map((result, index) =>
+            `<button class="search-result" data-${key}-result="${index}">${esc(result.display_name)}</button>`).join("");
+          document.querySelectorAll(`[data-${key}-result]`).forEach((button) => button.addEventListener("click", () => {
+            const result = results[Number(button.dataset[`${key}Result`])];
+            state[key] = result;
+            $(inputId).value = result.display_name;
+            showNearbyChoices(key, result);
+          }));
+        } catch { $(resultsId).innerHTML = `<div class="empty">Location search failed.</div>`; }
+      }
+      async function showNearbyChoices(key, location) {
+        const resultsId = key === "origin" ? "origin-results" : "destination-results";
+        const data = await json(`/nearby/stops?latitude=${location.latitude}&longitude=${location.longitude}&limit=5`);
+        $(resultsId).innerHTML = `<div class="meta">Best nearby stop is selected; choose another if needed:</div>` +
+          data.stops.map((stop, index) => `<button class="search-result" data-${key}-stop="${index}">
+            ${esc(stop.name)} (${stop.distance_meters}m) · ${esc(stop.routes.join(", "))}</button>`).join("");
+        document.querySelectorAll(`[data-${key}-stop]`).forEach((button) => button.addEventListener("click", () => {
+          const stop = data.stops[Number(button.dataset[`${key}Stop`])];
+          state[key] = stop;
+          $(resultsId).innerHTML = `<div class="meta">Using ${esc(stop.name)} (${stop.distance_meters}m away)</div>`;
+          updateSelectedStops();
+        }));
+      }
+      async function planTrip() {
+        if (!state.origin || !state.destination) {
+          $("plan-results").innerHTML = `<div class="empty">Choose both a starting point and destination first.</div>`;
+          return;
+        }
+        let originStop = state.origin.stop_id ? state.origin : null;
+        let destinationStop = state.destination.stop_id ? state.destination : null;
+        if (!originStop) originStop = (await json(`/nearby/stops?latitude=${state.origin.latitude}&longitude=${state.origin.longitude}&limit=5`)).stops[0];
+        if (!destinationStop) destinationStop = (await json(`/nearby/stops?latitude=${state.destination.latitude}&longitude=${state.destination.longitude}&limit=5`)).stops[0];
+        state.origin = originStop;
+        state.destination = destinationStop;
+        updateSelectedStops();
+        const body = { origin_stop_id: originStop.stop_id, destination_stop_id: destinationStop.stop_id,
+          mode: $("plan-mode").value };
+        if (body.mode === "arrive_by") body.arrive_by = new Date($("arrive-by").value).toISOString();
+        $("plan-results").innerHTML = `<div class="empty">Comparing direct buses…</div>`;
+        try {
+          const data = await fetch("/plan", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+          if (!data.ok) throw new Error(await data.text());
+          const result = await data.json();
+          $("plan-results").innerHTML = result.options.length ? result.options.map((option) =>
+            `<div class="plan-option"><div class="card-head"><strong>Route ${esc(option.route_short_name || "?")}</strong>
+              <span class="eta">${Math.max(0, option.wait_minutes)} min wait</span></div>
+              <div>${esc(option.origin_stop.name)} → ${esc(option.destination_stop.name)}</div>
+              <div class="meta">Bus ${new Date(option.next_bus_at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}
+              · arrives ${new Date(option.estimated_arrival_at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}
+              · ${option.travel_minutes} min ride${option.realtime ? " · live" : " · schedule estimate"}</div></div>`).join("") :
+            `<div class="empty">No direct buses match those locations and timing.</div>`;
+        } catch { $("plan-results").innerHTML = `<div class="empty">Trip planning failed.</div>`; }
       }
       async function renderMap() {
         const data = await json(`/routes/${encodeURIComponent($("map-route").value)}/map`);
@@ -209,10 +339,34 @@
         if (tab.dataset.panel === "map-panel") renderMap();
       }));
       $("map-route").addEventListener("change", renderMap);
-      $("plan-submit").addEventListener("click", renderSchedule);
+      $("plan-submit").addEventListener("click", planTrip);
+      $("plan-mode").addEventListener("change", () => {
+        $("deadline-label").style.display = $("plan-mode").value === "arrive_by" ? "grid" : "none";
+      });
+      $("origin-search").addEventListener("change", () => searchLocation("origin-search", "origin-results", "origin"));
+      $("destination-search").addEventListener("change", () => searchLocation("destination-search", "destination-results", "destination"));
+      $("origin-location").addEventListener("click", () => locate(async (lat, lon) => {
+        const results = await json(`/nearby/stops?latitude=${lat}&longitude=${lon}&limit=5`);
+        state.origin = results.stops[0];
+        $("origin-search").value = state.origin.name;
+        $("origin-results").innerHTML = results.stops.map((stop, index) =>
+          `<button class="search-result" data-origin-stop="${index}">${esc(stop.name)} (${stop.distance_meters}m)</button>`).join("");
+        document.querySelectorAll("[data-origin-stop]").forEach((button) => button.addEventListener("click", () => {
+          state.origin = results.stops[Number(button.dataset.originStop)];
+          $("origin-search").value = state.origin.name;
+          updateSelectedStops();
+        }));
+      }));
+      $("use-location").addEventListener("click", () => locate((lat, lon) => renderNearby(lat, lon)));
       $("refresh").addEventListener("click", async () => { await loadHealth(); await renderBoard(); });
+      $("arrive-by").value = new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16);
+      $("deadline-label").style.display = "none";
       loadReferenceData().then(async () => { await loadHealth(); await renderBoard(); });
-      setInterval(async () => { await loadHealth(); if ($("board").classList.contains("active")) renderBoard(); }, 20000);
+      setInterval(async () => { await loadHealth(); if ($("board").classList.contains("active")) renderBoard();
+        if ($("nearby-panel").classList.contains("active") && state.nearby.length) {
+          const first = state.nearby[0]; if (first.latitude && first.longitude) renderNearby(first.latitude, first.longitude);
+        }
+      }, 20000);
     </script>
   </body>
 </html>
