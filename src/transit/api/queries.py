@@ -18,7 +18,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from math import cos, pi
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Row, and_, desc, func, select
+from sqlalchemy import Row, and_, case, desc, func, select
 from sqlalchemy.orm import Session, aliased
 
 from transit.config import AGENCY_TIMEZONE
@@ -126,7 +126,10 @@ def direct_trip_options(
             Trip.service_id.in_(service_ids),
             origin.departure_seconds >= now_seconds - 2 * 60 * 60,
         )
-        .order_by(origin.departure_seconds)
+        .order_by(
+            case((origin.departure_seconds >= now_seconds, 0), else_=1),
+            origin.departure_seconds,
+        )
         .limit(100)
     )
     rows = list(session.execute(query))
